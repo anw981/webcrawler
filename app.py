@@ -102,15 +102,17 @@ def crawl_site(start_urls, keywords, visited, depth=0):
 
 # ==================== GOOGLE SEARCH API ====================
 def google_search(query, api_key, cse_id):
-    query_with_quotes = " ".join([f'"{k.strip()}"' for k in query.split(",")])
+    query_with_quotes = " ".join([f'"{k.strip()}"' for k in query.split(",")])  # Add quotes to each keyword
 
-    url = f"https://www.googleapis.com/customsearch/v1?q={query}&key={api_key}&cx={cse_id}"
+    url = f"https://www.googleapis.com/customsearch/v1?q={query_with_quotes}&key={api_key}&cx={cse_id}"  # Use query_with_quotes
     try:
         response = requests.get(url)
         results = response.json().get("items", [])
         return [item["link"] for item in results if "link" in item]
-    except:
+    except Exception as e:
+        st.error(f"Error fetching results: {e}")
         return []
+
 
 # ==================== STREAMLIT APP ====================
 st.set_page_config(page_title="Smart Web Crawler", layout="wide")
