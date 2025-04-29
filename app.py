@@ -122,29 +122,60 @@ sheet_url_open = st.text_input("Enter Google Sheet URL for Open Access Links")
 sheet_url_form = st.text_input("Enter Google Sheet URL for Form-Based Links")
 credentials = load_credentials()
 
+# Function to generate queries for Google Search (AND/OR combinations)
+def generate_queries(keywords):
+    queries = []
+    keywords = [keyword.strip() for keyword in keywords]
+    # Generate all combinations of AND/OR logic for keywords
+    and_query = " AND ".join(keywords)
+    or_query = " OR ".join(keywords)
+    queries.append(and_query)
+    queries.append(or_query)
+    return queries
+
+# Main logic
 if st.button("Start Crawling") and keywords_input and credentials and sheet_url_open and sheet_url_form:
     keywords = [k.strip() for k in keywords_input.split(",") if k.strip()]
     client = get_gsheet_client(credentials)
     sheet_open = client.open_by_url(sheet_url_open).sheet1
     sheet_form = client.open_by_url(sheet_url_form).sheet1
 
-    if option == "Google Search":
-        query = " ".join(keywords)
-        initial_urls = google_search(query, api_key, cse_id)
-    elif option == "Internal Site Search":
-        initial_urls = CUSTOM_DOMAINS
-    else:
-        initial_urls = CUSTOM_DOMAINS
+    # Collecting initial URLs
+    initial_urls = []
 
+    # 1. Get URLs from Google Search (Option 1)
+    if option == "Google Search" or option == "Selenium + Scrapy":
+        queries = generate_queries(keywords)
+        for query in queries:
+            google_urls = google_search(query, api_key, cse_id)
+            initial_urls.extend(google_urls)
+    
+    # 2. Get URLs from Internal Domain List (Option 2)
+    if option == "Internal Site Search" or option == "Selenium + Scrapy":
+        initial_urls.extend(CUSTOM_DOMAINS)
+
+    # Deduplicate and make sure URLs are unique
+    initial_urls = list(set(initial_urls))
+    
+    # Check if there are starting URLs
+    if not initial_urls:
+        st.warning("No valid starting URLs found.")
+        st.stop()
+
+    # Start crawling with Selenium + Scrapy
     visited = set()
     start_time = time.time()
     final_results = crawl_site(initial_urls, keywords, visited)
+
+    # Check if crawl timed out
     if time.time() - start_time > CRAWL_TIMEOUT:
         st.warning("Crawl timed out.")
 
+    # Update Google Sheets with the results
     open_added = update_sheet(sheet_open, list(set(final_results['open'])))
     form_added = update_sheet(sheet_form, list(set(final_results['form'])))
 
+    # Display the results
     st.subheader("Crawling Complete")
     st.write(f"Added {len(open_added)} open access links.")
     st.write(f"Added {len(form_added)} form-based links.")
