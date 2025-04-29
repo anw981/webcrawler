@@ -5,7 +5,7 @@ google-auth==2.3.3
 google-auth-oauthlib==0.4.6
 google-auth-httplib2==0.1.0
 gspread==5.2.0
-sklearn==0.24.2
+scikit-learn==0.24.0  # Updated version
 pandas==1.3.3
 numpy==1.21.2
 selenium==3.141.0
