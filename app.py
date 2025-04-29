@@ -102,6 +102,8 @@ def crawl_site(start_urls, keywords, visited, depth=0):
 
 # ==================== GOOGLE SEARCH API ====================
 def google_search(query, api_key, cse_id):
+    query_with_quotes = " ".join([f'"{k.strip()}"' for k in query.split(",")])
+
     url = f"https://www.googleapis.com/customsearch/v1?q={query}&key={api_key}&cx={cse_id}"
     try:
         response = requests.get(url)
