@@ -11,31 +11,7 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 from google.oauth2.service_account import Credentials
 import gspread
-import threading
-from selenium import webdriver
-from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.common.by import By
-from selenium.webdriver.chrome.service import Service as ChromeService
 from playwright.sync_api import sync_playwright
-
-from selenium import webdriver
-from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.chrome.service import Service
-
-# Configure Chrome options for Streamlit Cloud
-chrome_options = Options()
-chrome_options.add_argument("--headless")
-chrome_options.add_argument("--no-sandbox")
-chrome_options.add_argument("--disable-dev-shm-usage")
-chrome_options.add_argument("--disable-gpu")
-chrome_options.binary_location = "/usr/bin/chromium-browser"
-
-# Use the system-installed chromedriver
-service = Service("/usr/bin/chromedriver")
-
-# Create the driver
-driver = webdriver.Chrome(service=service, options=chrome_options)
-
 
 # ==================== CONFIGURATION ====================
 RELEVANCE_THRESHOLD = 0.2
@@ -76,7 +52,7 @@ def classify_link(html):
         return 'form'
     return 'open'
 
-# ==================== CRAWLING ====================
+# ==================== CRAWLING (Playwright only) ====================
 def get_links_from_page(url):
     try:
         with sync_playwright() as p:
@@ -97,32 +73,24 @@ def get_links_from_page(url):
     except Exception:
         return '', []
 
-
 def crawl_site(start_urls, keywords, visited, depth=0):
     results = {'open': [], 'form': []}
     if depth > MAX_CRAWL_DEPTH:
         return results
 
-    # Start Playwright browser instance
-    with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
-        page = browser.new_page()
+    for url in start_urls:
+        if url in visited:
+            continue
+        visited.add(url)
+        html, links = get_links_from_page(url)
+        if is_relevant(html, keywords):
+            category = classify_link(html)
+            results[category].append(url)
+        sub_results = crawl_site(links, keywords, visited, depth + 1)
+        results['open'].extend(sub_results['open'])
+        results['form'].extend(sub_results['form'])
 
-        for url in start_urls:
-            if url in visited:
-                continue
-            visited.add(url)
-            html, links = get_links_from_page(url)
-            if is_relevant(html, keywords):
-                category = classify_link(html)
-                results[category].append(url)
-            sub_results = crawl_site(links, keywords, visited, depth + 1)
-            results['open'].extend(sub_results['open'])
-            results['form'].extend(sub_results['form'])
-
-        browser.close()
     return results
-
 
 # ==================== GOOGLE SEARCH API ====================
 def google_search(query, api_key, cse_id):
@@ -137,13 +105,12 @@ def google_search(query, api_key, cse_id):
         st.error(f"Error fetching results: {e}")
         return []
 
-
 # ==================== STREAMLIT APP ====================
 st.set_page_config(page_title="Smart Web Crawler", layout="wide")
 st.title("Smart Web Crawler with Google Sheets Integration")
 
 keywords_input = st.text_input("Enter keywords (comma separated):")
-option = st.selectbox("Choose search option", ["Google Search", "Internal Site Search", "Selenium + Scrapy"])
+option = st.selectbox("Choose search option", ["Google Search", "Internal Site Search"])
 api_key = st.text_input("Google API Key (for Google Search option only):", type="password")
 cse_id = st.text_input("Custom Search Engine ID (for Google Search option only):", type="password")
 sheet_url_open = st.text_input("Enter Google Sheet URL for Open Access Links")
@@ -172,14 +139,14 @@ if st.button("Start Crawling") and keywords_input and credentials and sheet_url_
     initial_urls = []
 
     # 1. Get URLs from Google Search (Option 1)
-    if option == "Google Search" or option == "Selenium + Scrapy":
+    if option == "Google Search":
         queries = generate_queries(keywords)
         for query in queries:
             google_urls = google_search(query, api_key, cse_id)
             initial_urls.extend(google_urls)
     
     # 2. Get URLs from Internal Domain List (Option 2)
-    if option == "Internal Site Search" or option == "Selenium + Scrapy":
+    if option == "Internal Site Search":
         initial_urls.extend(CUSTOM_DOMAINS)
 
     # Deduplicate and make sure URLs are unique
@@ -190,7 +157,7 @@ if st.button("Start Crawling") and keywords_input and credentials and sheet_url_
         st.warning("No valid starting URLs found.")
         st.stop()
 
-    # Start crawling with Selenium + Scrapy
+    # Start crawling
     visited = set()
     start_time = time.time()
     final_results = crawl_site(initial_urls, keywords, visited)
