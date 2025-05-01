@@ -3,8 +3,6 @@ import requests
 import time
 import re
 import json
-import pandas as pd
-import numpy as np
 from urllib.parse import urlparse, urljoin
 from bs4 import BeautifulSoup
 from sklearn.feature_extraction.text import TfidfVectorizer
@@ -14,10 +12,10 @@ import gspread
 from playwright.sync_api import sync_playwright
 
 # ==================== CONFIGURATION ====================
-RELEVANCE_THRESHOLD = 0.05
+RELEVANCE_THRESHOLD = 0.01  # Lowered for debugging
 MAX_CRAWL_DEPTH = 2
 CRAWL_TIMEOUT = 30 * 60  # 30 minutes
-CUSTOM_DOMAINS = ["https://example1.com", "https://example2.com"]  # Replace with your actual domain list
+CUSTOM_DOMAINS = ["https://example.com"]  # Use a simple, known site for testing
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 
 # ==================== GOOGLE SHEETS ====================
@@ -42,9 +40,13 @@ def update_sheet(sheet, links):
 # ==================== TF-IDF RELEVANCE ====================
 def is_relevant(content, keywords):
     docs = [content, " ".join(keywords)]
-    vectorizer = TfidfVectorizer().fit_transform(docs)
-    score = cosine_similarity(vectorizer[0:1], vectorizer[1:2])[0][0]
-    return score >= RELEVANCE_THRESHOLD
+    try:
+        vectorizer = TfidfVectorizer().fit_transform(docs)
+        score = cosine_similarity(vectorizer[0:1], vectorizer[1:2])[0][0]
+    except Exception as e:
+        st.write(f"Error in TF-IDF for content: {str(e)}")
+        return False, 0
+    return score >= RELEVANCE_THRESHOLD, score
 
 # ==================== LINK CLASSIFICATION ====================
 def classify_link(html):
@@ -61,6 +63,7 @@ def get_links_from_page(url):
             page.goto(url)
             time.sleep(2)  # Ensure page is fully loaded
             html = page.content()
+            st.write(f"Fetched {len(html)} characters from {url}")
             soup = BeautifulSoup(html, 'html.parser')
             links = set()
             for tag in soup.find_all('a', href=True):
@@ -70,7 +73,8 @@ def get_links_from_page(url):
                     links.add(full_url)
             browser.close()
             return html, list(links)
-    except Exception:
+    except Exception as e:
+        st.write(f"Error fetching page {url}: {e}")
         return '', []
 
 def crawl_site(start_urls, keywords, visited, depth=0):
@@ -83,7 +87,12 @@ def crawl_site(start_urls, keywords, visited, depth=0):
             continue
         visited.add(url)
         html, links = get_links_from_page(url)
-        if is_relevant(html, keywords):
+        if not html:
+            st.write(f"Skipped (no HTML): {url}")
+            continue
+        is_rel, score = is_relevant(html, keywords)
+        st.write(f"Visited: {url} | HTML length: {len(html)} | Relevance score: {score:.3f}")
+        if is_rel:
             category = classify_link(html)
             results[category].append(url)
         sub_results = crawl_site(links, keywords, visited, depth + 1)
@@ -117,18 +126,15 @@ sheet_url_open = st.text_input("Enter Google Sheet URL for Open Access Links")
 sheet_url_form = st.text_input("Enter Google Sheet URL for Form-Based Links")
 credentials = load_credentials()
 
-# Function to generate queries for Google Search (AND/OR combinations)
 def generate_queries(keywords):
     queries = []
     keywords = [keyword.strip() for keyword in keywords]
-    # Generate all combinations of AND/OR logic for keywords
     and_query = " AND ".join(keywords)
     or_query = " OR ".join(keywords)
     queries.append(and_query)
     queries.append(or_query)
     return queries
 
-# Main logic
 if st.button("Start Crawling") and keywords_input and credentials and sheet_url_open and sheet_url_form:
     keywords = [k.strip() for k in keywords_input.split(",") if k.strip()]
     client = get_gsheet_client(credentials)
@@ -152,7 +158,8 @@ if st.button("Start Crawling") and keywords_input and credentials and sheet_url_
     # Deduplicate and make sure URLs are unique
     initial_urls = list(set(initial_urls))
     
-    # Check if there are starting URLs
+    st.write("Initial URLs to crawl:", initial_urls)
+    
     if not initial_urls:
         st.warning("No valid starting URLs found.")
         st.stop()
