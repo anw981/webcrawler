@@ -14,7 +14,7 @@ import gspread
 from playwright.sync_api import sync_playwright
 
 # ==================== CONFIGURATION ====================
-RELEVANCE_THRESHOLD = 0.2
+RELEVANCE_THRESHOLD = 0.05
 MAX_CRAWL_DEPTH = 2
 CRAWL_TIMEOUT = 30 * 60  # 30 minutes
 CUSTOM_DOMAINS = ["https://example1.com", "https://example2.com"]  # Replace with your actual domain list
