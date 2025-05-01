@@ -17,6 +17,8 @@ from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
 from selenium.webdriver.chrome.service import Service as ChromeService
 from webdriver_manager.chrome import ChromeDriverManager
+from playwright.sync_api import sync_playwright
+
 
 # ==================== CONFIGURATION ====================
 RELEVANCE_THRESHOLD = 0.2
@@ -58,47 +60,52 @@ def classify_link(html):
     return 'open'
 
 # ==================== CRAWLING ====================
-def get_links_from_page(driver, url):
+def get_links_from_page(url):
     try:
-        driver.get(url)
-        time.sleep(2)
-        html = driver.page_source
-        soup = BeautifulSoup(html, 'html.parser')
-        links = set()
-        for tag in soup.find_all('a', href=True):
-            href = tag['href']
-            full_url = urljoin(url, href)
-            if urlparse(full_url).scheme in ['http', 'https']:
-                links.add(full_url)
-        return html, list(links)
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True)
+            page = browser.new_page()
+            page.goto(url)
+            time.sleep(2)  # Ensure page is fully loaded
+            html = page.content()
+            soup = BeautifulSoup(html, 'html.parser')
+            links = set()
+            for tag in soup.find_all('a', href=True):
+                href = tag['href']
+                full_url = urljoin(url, href)
+                if urlparse(full_url).scheme in ['http', 'https']:
+                    links.add(full_url)
+            browser.close()
+            return html, list(links)
     except Exception:
         return '', []
+
 
 def crawl_site(start_urls, keywords, visited, depth=0):
     results = {'open': [], 'form': []}
     if depth > MAX_CRAWL_DEPTH:
         return results
 
-    chrome_options = Options()
-    chrome_options.add_argument("--headless")
-    chrome_options.add_argument("--no-sandbox")
-    chrome_options.add_argument("--disable-dev-shm-usage")
-    driver = webdriver.Chrome(service=ChromeService(ChromeDriverManager().install()), options=chrome_options)
+    # Start Playwright browser instance
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        page = browser.new_page()
 
-    for url in start_urls:
-        if url in visited:
-            continue
-        visited.add(url)
-        html, links = get_links_from_page(driver, url)
-        if is_relevant(html, keywords):
-            category = classify_link(html)
-            results[category].append(url)
-        sub_results = crawl_site(links, keywords, visited, depth + 1)
-        results['open'].extend(sub_results['open'])
-        results['form'].extend(sub_results['form'])
+        for url in start_urls:
+            if url in visited:
+                continue
+            visited.add(url)
+            html, links = get_links_from_page(url)
+            if is_relevant(html, keywords):
+                category = classify_link(html)
+                results[category].append(url)
+            sub_results = crawl_site(links, keywords, visited, depth + 1)
+            results['open'].extend(sub_results['open'])
+            results['form'].extend(sub_results['form'])
 
-    driver.quit()
+        browser.close()
     return results
+
 
 # ==================== GOOGLE SEARCH API ====================
 def google_search(query, api_key, cse_id):
