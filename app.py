@@ -198,4 +198,3 @@ if st.button("Start Crawling") and keywords_input and credentials and sheet_url_
     st.subheader("Crawling Complete")
     st.write(f"Added {len(open_added)} open access links.")
     st.write(f"Added {len(form_added)} form-based links.")
-
