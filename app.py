@@ -10,6 +10,7 @@ from sklearn.metrics.pairwise import cosine_similarity
 from google.oauth2.service_account import Credentials
 import gspread
 from playwright.sync_api import sync_playwright
+import os
 
 # ==================== CONFIGURATION ====================
 RELEVANCE_THRESHOLD = 0.01  # Lowered for debugging
@@ -55,6 +56,10 @@ def classify_link(html):
     return 'open'
 
 # ==================== CRAWLING (Playwright only) ====================
+def install_playwright_browsers():
+    """Ensure Playwright browsers are installed"""
+    os.system("playwright install")
+
 def get_links_from_page(url):
     try:
         with sync_playwright() as p:
@@ -74,7 +79,7 @@ def get_links_from_page(url):
             browser.close()
             return html, list(links)
     except Exception as e:
-        st.write(f"Error fetching page {url}: {e}")
+        st.write(f"Error fetching page {url}: {str(e)}")
         return '', []
 
 def crawl_site(start_urls, keywords, visited, depth=0):
@@ -121,6 +126,9 @@ def google_search(query, api_key, cse_id):
 st.set_page_config(page_title="Smart Web Crawler", layout="wide")
 st.title("Smart Web Crawler with Google Sheets Integration")
 
+# Ensure Playwright browsers are installed before running any logic
+install_playwright_browsers()
+
 keywords_input = st.text_input("Enter keywords (comma separated):")
 option = st.selectbox("Choose search option", ["Google Search", "Internal Site Search"])
 api_key = st.text_input("Google API Key (for Google Search option only):", type="password")
@@ -138,6 +146,12 @@ def generate_queries(keywords):
 
 if st.button("Start Crawling") and keywords_input and credentials and sheet_url_open and sheet_url_form:
     keywords = [k.strip() for k in keywords_input.split(",") if k.strip()]
+    
+    # Check for missing Google API credentials
+    if not api_key or not cse_id:
+        st.error("Please provide valid Google API Key and Custom Search Engine ID")
+        st.stop()
+
     client = get_gsheet_client(credentials)
     sheet_open = client.open_by_url(sheet_url_open).sheet1
     sheet_form = client.open_by_url(sheet_url_form).sheet1
@@ -168,7 +182,9 @@ if st.button("Start Crawling") and keywords_input and credentials and sheet_url_
     # Start crawling
     visited = set()
     start_time = time.time()
-    final_results = crawl_site(initial_urls, keywords, visited)
+    
+    with st.spinner('Crawling in progress...'):
+        final_results = crawl_site(initial_urls, keywords, visited)
 
     # Check if crawl timed out
     if time.time() - start_time > CRAWL_TIMEOUT:
@@ -182,3 +198,4 @@ if st.button("Start Crawling") and keywords_input and credentials and sheet_url_
     st.subheader("Crawling Complete")
     st.write(f"Added {len(open_added)} open access links.")
     st.write(f"Added {len(form_added)} form-based links.")
+
