@@ -103,16 +103,19 @@ def crawl_site(start_urls, keywords, visited, depth=0):
 
 # ==================== GOOGLE SEARCH API ====================
 def google_search(query, api_key, cse_id):
-    query_with_quotes = " ".join([f'"{k.strip()}"' for k in query.split(",")])  # Add quotes to each keyword
-
-    url = f"https://www.googleapis.com/customsearch/v1?q={query_with_quotes}&key={api_key}&cx={cse_id}"  # Use query_with_quotes
+    url = f"https://www.googleapis.com/customsearch/v1?q={query}&key={api_key}&cx={cse_id}"
+    st.write(f"Querying Google Search API with: {query}")  # Helpful for debugging
     try:
         response = requests.get(url)
+        if response.status_code != 200:
+            st.error(f"Error {response.status_code}: {response.text}")
+            return []
         results = response.json().get("items", [])
         return [item["link"] for item in results if "link" in item]
     except Exception as e:
-        st.error(f"Error fetching results: {e}")
+        st.error(f"Exception while fetching Google results: {e}")
         return []
+
 
 # ==================== STREAMLIT APP ====================
 st.set_page_config(page_title="Smart Web Crawler", layout="wide")
@@ -127,13 +130,11 @@ sheet_url_form = st.text_input("Enter Google Sheet URL for Form-Based Links")
 credentials = load_credentials()
 
 def generate_queries(keywords):
-    queries = []
-    keywords = [keyword.strip() for keyword in keywords]
-    and_query = " AND ".join(keywords)
-    or_query = " OR ".join(keywords)
-    queries.append(and_query)
-    queries.append(or_query)
-    return queries
+    keywords = [k.strip() for k in keywords]
+    and_query = " AND ".join([f'"{k}"' for k in keywords])
+    or_query = " OR ".join([f'"{k}"' for k in keywords])
+    return [and_query, or_query]
+
 
 if st.button("Start Crawling") and keywords_input and credentials and sheet_url_open and sheet_url_form:
     keywords = [k.strip() for k in keywords_input.split(",") if k.strip()]
