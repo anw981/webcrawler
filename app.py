@@ -1,3 +1,4 @@
+# streamlit_app.py
 import streamlit as st
 import requests
 import time
@@ -5,196 +6,150 @@ import re
 import json
 from urllib.parse import urlparse, urljoin
 from bs4 import BeautifulSoup
-from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.metrics.pairwise import cosine_similarity
+from sentence_transformers import SentenceTransformer, util
 from google.oauth2.service_account import Credentials
 import gspread
-from playwright.sync_api import sync_playwright
 import os
 
 # ==================== CONFIGURATION ====================
-RELEVANCE_THRESHOLD = 0.01  # Lowered for debugging
+RELEVANCE_THRESHOLD = 0.3
 MAX_CRAWL_DEPTH = 2
-CRAWL_TIMEOUT = 5 * 60  # 30 minutes
-CUSTOM_DOMAINS = ["https://example.com"]  # Use a simple, known site for testing
+CRAWL_TIMEOUT = 5 * 60
+CUSTOM_DOMAINS = [
+    "https://rbi.org.in",
+    "https://npci.org.in"
+]  # Editable list
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 
-# ==================== GOOGLE SHEETS ====================
-def get_gsheet_client(credentials_json):
-    credentials = Credentials.from_service_account_info(credentials_json, scopes=SCOPES)
-    client = gspread.authorize(credentials)
-    return client
+# Embed your credentials JSON directly
+SERVICE_ACCOUNT_JSON = {
+    "type": "service_account",
+    "project_id": "your-project-id",
+    "private_key_id": "xxx",
+    "private_key": "-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----\n",
+    "client_email": "crawler@your-project.iam.gserviceaccount.com",
+    "client_id": "...",
+    ...  # rest of your credentials
+}
 
-def load_credentials():
-    uploaded_file = st.file_uploader("Upload Google Sheets credentials JSON", type="json")
-    if uploaded_file:
-        return json.load(uploaded_file)
-    return None
+# Hardcoded sheet URLs
+OPEN_SHEET_URL = "https://docs.google.com/spreadsheets/d/1hfmS2Bf3KpmJ9mjM6idJZaKinozSqO8CNB7qfX0WlRM/edit?gid=0#gid=0"
+FORM_SHEET_URL = "https://docs.google.com/spreadsheets/d/1_3q3I-OtNBvJx1VmaTug9Hqn_WZYIsbXQ4dVNLFrr20/edit?gid=0#gid=0"
 
-def update_sheet(sheet, links):
-    existing = sheet.col_values(1)
-    new_links = [link for link in links if link not in existing]
-    if new_links:
-        sheet.append_rows([[link] for link in new_links])
-    return new_links
+model = SentenceTransformer('all-MiniLM-L6-v2')
 
-# ==================== TF-IDF RELEVANCE ====================
-def is_relevant(content, keywords):
-    docs = [content, " ".join(keywords)]
+def get_gsheet_client():
+    credentials = Credentials.from_service_account_info(SERVICE_ACCOUNT_JSON, scopes=SCOPES)
+    return gspread.authorize(credentials)
+
+def update_sheet(sheet, rows):
+    existing = set(sheet.col_values(2))
+    new_rows = [row for row in rows if row[1] not in existing]
+    if new_rows:
+        sheet.append_rows(new_rows)
+    return new_rows
+
+def is_relevant_bert(text, keywords):
     try:
-        vectorizer = TfidfVectorizer().fit_transform(docs)
-        score = cosine_similarity(vectorizer[0:1], vectorizer[1:2])[0][0]
+        content_emb = model.encode(text, convert_to_tensor=True)
+        keyword_emb = model.encode(" ".join(keywords), convert_to_tensor=True)
+        score = util.pytorch_cos_sim(content_emb, keyword_emb).item()
+        return score >= RELEVANCE_THRESHOLD, score
     except Exception as e:
-        st.write(f"Error in TF-IDF for content: {str(e)}")
+        st.write(f"BERT error: {e}")
         return False, 0
-    return score >= RELEVANCE_THRESHOLD, score
 
-# ==================== LINK CLASSIFICATION ====================
 def classify_link(html):
-    if re.search(r'<input|<form|@|\.com', html, re.IGNORECASE):
-        return 'form'
-    return 'open'
+    return 'form' if re.search(r'<input|<form|@|\.com', html, re.IGNORECASE) else 'open'
 
-# ==================== CRAWLING (Playwright only) ====================
-def install_playwright_browsers():
-    """Ensure Playwright browsers are installed"""
-    os.system("playwright install")
-
-def get_links_from_page(url):
+def get_links_requests(url):
     try:
-        with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True)
-            page = browser.new_page()
-            page.goto(url)
-            time.sleep(2)  # Ensure page is fully loaded
-            html = page.content()
-            st.write(f"Fetched {len(html)} characters from {url}")
-            soup = BeautifulSoup(html, 'html.parser')
-            links = set()
-            for tag in soup.find_all('a', href=True):
-                href = tag['href']
-                full_url = urljoin(url, href)
-                if urlparse(full_url).scheme in ['http', 'https']:
-                    links.add(full_url)
-            browser.close()
-            return html, list(links)
+        response = requests.get(url, timeout=10)
+        html = response.text
+        soup = BeautifulSoup(html, 'html.parser')
+        links = list(set(urljoin(url, tag['href']) for tag in soup.find_all('a', href=True)))
+        return html, links
     except Exception as e:
-        st.write(f"Error fetching page {url}: {str(e)}")
+        st.write(f"Requests error: {e}")
         return '', []
 
-def crawl_site(start_urls, keywords, visited, depth=0):
+def crawl_site(start_urls, keywords, visited, depth=0, start_time=None):
+    if start_time is None:
+        start_time = time.time()
     results = {'open': [], 'form': []}
-    if depth > MAX_CRAWL_DEPTH:
+
+    if depth > MAX_CRAWL_DEPTH or (time.time() - start_time > CRAWL_TIMEOUT):
         return results
 
     for url in start_urls:
-        if url in visited:
+        if url in visited or (time.time() - start_time > CRAWL_TIMEOUT):
             continue
         visited.add(url)
-        html, links = get_links_from_page(url)
+
+        html, links = get_links_requests(url)
         if not html:
-            st.write(f"Skipped (no HTML): {url}")
             continue
-        is_rel, score = is_relevant(html, keywords)
-        st.write(f"Visited: {url} | HTML length: {len(html)} | Relevance score: {score:.3f}")
+
+        soup = BeautifulSoup(html, 'html.parser')
+        title = soup.title.string.strip() if soup.title else "(No Title)"
+        summary = soup.find('p').get_text().strip() if soup.find('p') else ""
+        main_text = " ".join([p.get_text() for p in soup.find_all('p')])
+        is_rel, score = is_relevant_bert(main_text, keywords)
+
+        st.write(f"Visited: {url} | Relevance Score: {score:.3f}")
+
         if is_rel:
             category = classify_link(html)
-            results[category].append(url)
-        sub_results = crawl_site(links, keywords, visited, depth + 1)
+            results[category].append([title, url, category, summary, round(score, 3)])
+
+        sub_results = crawl_site(links, keywords, visited, depth + 1, start_time=start_time)
         results['open'].extend(sub_results['open'])
         results['form'].extend(sub_results['form'])
 
     return results
 
-# ==================== GOOGLE SEARCH API ====================
 def google_search(query, api_key, cse_id):
-    url = f"https://www.googleapis.com/customsearch/v1?q={query}&key={api_key}&cx={cse_id}"
-    st.write(f"Querying Google Search API with: {query}")  # Helpful for debugging
     try:
-        response = requests.get(url)
-        if response.status_code != 200:
-            st.error(f"Error {response.status_code}: {response.text}")
-            return []
-        results = response.json().get("items", [])
-        return [item["link"] for item in results if "link" in item]
-    except Exception as e:
-        st.error(f"Exception while fetching Google results: {e}")
+        url = f"https://www.googleapis.com/customsearch/v1?q={query}&key={api_key}&cx={cse_id}"
+        r = requests.get(url)
+        return [item['link'] for item in r.json().get('items', []) if 'link' in item]
+    except:
         return []
 
-
-# ==================== STREAMLIT APP ====================
+# ==================== STREAMLIT UI ====================
 st.set_page_config(page_title="Smart Web Crawler", layout="wide")
-st.title("Smart Web Crawler with Google Sheets Integration")
-
-# Ensure Playwright browsers are installed before running any logic
-install_playwright_browsers()
+st.title("BERT-Powered Smart Web Crawler")
 
 keywords_input = st.text_input("Enter keywords (comma separated):")
-option = st.selectbox("Choose search option", ["Google Search", "Internal Site Search"])
-api_key = st.text_input("Google API Key (for Google Search option only):", type="password")
-cse_id = st.text_input("Custom Search Engine ID (for Google Search option only):", type="password")
-sheet_url_open = st.text_input("Enter Google Sheet URL for Open Access Links")
-sheet_url_form = st.text_input("Enter Google Sheet URL for Form-Based Links")
-credentials = load_credentials()
+search_mode = st.selectbox("Select crawling method", ["Google Search", "Internal Domains Only"])
+api_key = st.text_input("Google API Key:", type="password")
+cse_id = st.text_input("Custom Search Engine ID:", type="password")
 
-def generate_queries(keywords):
-    keywords = [k.strip() for k in keywords]
-    and_query = " AND ".join([f'"{k}"' for k in keywords])
-    or_query = " OR ".join([f'"{k}"' for k in keywords])
-    return [and_query, or_query]
-
-
-if st.button("Start Crawling") and keywords_input and credentials and sheet_url_open and sheet_url_form:
+if st.button("Start Crawling") and keywords_input:
     keywords = [k.strip() for k in keywords_input.split(",") if k.strip()]
-    
-    # Check for missing Google API credentials
-    if not api_key or not cse_id:
-        st.error("Please provide valid Google API Key and Custom Search Engine ID")
-        st.stop()
+    client = get_gsheet_client()
+    sheet_open = client.open_by_url(OPEN_SHEET_URL).sheet1
+    sheet_form = client.open_by_url(FORM_SHEET_URL).sheet1
 
-    client = get_gsheet_client(credentials)
-    sheet_open = client.open_by_url(sheet_url_open).sheet1
-    sheet_form = client.open_by_url(sheet_url_form).sheet1
-
-    # Collecting initial URLs
     initial_urls = []
+    if search_mode == "Google Search":
+        if not api_key or not cse_id:
+            st.error("API key and CSE ID required for Google Search")
+            st.stop()
+        queries = [" AND ".join([f'\"{k}\"' for k in keywords]), " OR ".join([f'\"{k}\"' for k in keywords])]
+        for q in queries:
+            initial_urls.extend(google_search(q, api_key, cse_id))
+    else:
+        initial_urls = CUSTOM_DOMAINS
 
-    # 1. Get URLs from Google Search (Option 1)
-    if option == "Google Search":
-        queries = generate_queries(keywords)
-        for query in queries:
-            google_urls = google_search(query, api_key, cse_id)
-            initial_urls.extend(google_urls)
-    
-    # 2. Get URLs from Internal Domain List (Option 2)
-    if option == "Internal Site Search":
-        initial_urls.extend(CUSTOM_DOMAINS)
-
-    # Deduplicate and make sure URLs are unique
-    initial_urls = list(set(initial_urls))
-    
-    st.write("Initial URLs to crawl:", initial_urls)
-    
-    if not initial_urls:
-        st.warning("No valid starting URLs found.")
-        st.stop()
-
-    # Start crawling
+    st.write("Initial URLs:", initial_urls)
     visited = set()
     start_time = time.time()
-    
-    with st.spinner('Crawling in progress...'):
-        final_results = crawl_site(initial_urls, keywords, visited)
+    with st.spinner("Crawling..."):
+        final_results = crawl_site(initial_urls, keywords, visited, start_time=start_time)
 
-    # Check if crawl timed out
-    if time.time() - start_time > CRAWL_TIMEOUT:
-        st.warning("Crawl timed out.")
-
-    # Update Google Sheets with the results
-    open_added = update_sheet(sheet_open, list(set(final_results['open'])))
-    form_added = update_sheet(sheet_form, list(set(final_results['form'])))
-
-    # Display the results
-    st.subheader("Crawling Complete")
-    st.write(f"Added {len(open_added)} open access links.")
-    st.write(f"Added {len(form_added)} form-based links.")
+    st.success("Crawling Done!")
+    st.write("Preview:", final_results)
+    open_written = update_sheet(sheet_open, final_results['open'])
+    form_written = update_sheet(sheet_form, final_results['form'])
+    st.write(f"Added {len(open_written)} open links, {len(form_written)} form links.")
