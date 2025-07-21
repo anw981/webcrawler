@@ -21,20 +21,12 @@ CUSTOM_DOMAINS = [
 ]  # Editable list
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 
-# Embed your credentials JSON directly
-SERVICE_ACCOUNT_JSON = {
-    "type": "service_account",
-    "project_id": "your-project-id",
-    "private_key_id": "xxx",
-    "private_key": "-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----\n",
-    "client_email": "crawler@your-project.iam.gserviceaccount.com",
-    "client_id": "...",
-    ...  # rest of your credentials
-}
+# Use secrets.toml instead of hardcoding
+SERVICE_ACCOUNT_JSON = st.secrets["google"]
 
 # Hardcoded sheet URLs
-OPEN_SHEET_URL = "https://docs.google.com/spreadsheets/d/1hfmS2Bf3KpmJ9mjM6idJZaKinozSqO8CNB7qfX0WlRM/edit?gid=0#gid=0"
-FORM_SHEET_URL = "https://docs.google.com/spreadsheets/d/1_3q3I-OtNBvJx1VmaTug9Hqn_WZYIsbXQ4dVNLFrr20/edit?gid=0#gid=0"
+OPEN_SHEET_URL = st.secrets["sheets"]["open"]
+FORM_SHEET_URL = st.secrets["sheets"]["form"]
 
 model = SentenceTransformer('all-MiniLM-L6-v2')
 
