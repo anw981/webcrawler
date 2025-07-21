@@ -15,7 +15,7 @@ import os
 # ==================== CONFIGURATION ====================
 RELEVANCE_THRESHOLD = 0.01  # Lowered for debugging
 MAX_CRAWL_DEPTH = 2
-CRAWL_TIMEOUT = 30 * 60  # 30 minutes
+CRAWL_TIMEOUT = 5 * 60  # 30 minutes
 CUSTOM_DOMAINS = ["https://example.com"]  # Use a simple, known site for testing
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 
